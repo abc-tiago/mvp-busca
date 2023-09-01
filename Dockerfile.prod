@@ -1,0 +1,10 @@
+FROM 990821845980.dkr.ecr.us-east-1.amazonaws.com/abc-nginx-php:8.1-ubuntu-v2
+WORKDIR /var/www
+COPY . .
+RUN composer install --prefer-dist --no-dev
+RUN date > build.txt
+RUN find /var/www -type d -exec chmod 0755 {} \;
+RUN find /var/www -type f -exec chmod 0644 {} \;
+RUN chown -Rf www-data:www-data /var/www
+# Cron para ler fila do laravel
+RUN echo "* * * * * root usr/bin/php /var/www/artisan schedule:run" > /etc/cron.d/cronjob

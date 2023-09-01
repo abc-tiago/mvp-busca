@@ -1,0 +1,2 @@
+#!/command/with-contenv sh
+/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluentbit.conf

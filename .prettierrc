@@ -1,0 +1,13 @@
+{
+    "tabWidth": 4,
+    "printWidth": 240,
+    "useTabs": false,
+    "php.suggest.basic": false,
+    "editor.formatOnSave": true,
+    "prettier.tabWidth": 4,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnPaste": true,
+    "php.validate.run": "onType",
+    "phpcs.standard": "PSR2",
+    "phpcs.executablePath": "docker exec -t produtos-php-fpm ./vendor/bin/phpcs"
+}

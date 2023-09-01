@@ -1,0 +1,190 @@
+#######################################
+# Início da imagem base
+#######################################
+FROM ubuntu:22.04
+
+# Path de configuração para o ambiente PROD, DEV ou LOCAL
+ENV PATH_CONFIG=.docker/config
+ENV PATH_CONFIG_FLUENT_BIT=.docker/config/fluent-bit
+ENV PATH_CONFIG_FPM=.docker/config/fpm
+ENV PATH_CONFIG_NGINX=.docker/config/nginx
+ENV PATH_CONFIG_PHP=.docker/config/php
+ENV PATH_CONFIG_S6=.docker/config/s6
+
+###################################################################
+# S6
+##################################################################
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y xz-utils
+
+# Add S6 supervisor (for graceful stop)
+ARG S6_OVERLAY_VERSION=3.1.5.0
+ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp
+RUN tar -Jxpf /tmp/s6-overlay-noarch.tar.xz -C /
+ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-x86_64.tar.xz /tmp
+RUN tar -C / -Jxpf /tmp/s6-overlay-x86_64.tar.xz
+ENTRYPOINT ["/init"]
+CMD []
+
+###################################################################
+# PHP e NGINX install
+##################################################################
+# Disable frontend dialogs
+ENV DEBIAN_FRONTEND=noninteractive
+# Pacotes essenciais
+ENV PHP_VERSION=8.1
+RUN apt-get update && apt-get install -y \
+    php${PHP_VERSION}-apcu \
+    php${PHP_VERSION}-bcmath \
+    php${PHP_VERSION}-curl \
+    php${PHP_VERSION}-cli \
+    php${PHP_VERSION}-common \
+    php${PHP_VERSION}-fpm \
+    php${PHP_VERSION}-intl \
+    php${PHP_VERSION}-pdo \
+    php${PHP_VERSION}-mbstring \
+    php${PHP_VERSION}-mysql \
+    php${PHP_VERSION}-tokenizer \
+    php${PHP_VERSION}-xml \
+    php${PHP_VERSION}-dev \
+    php${PHP_VERSION}-redis \
+    curl \
+    cron \
+    php-pear \
+    zip \
+    unzip \
+    g++ \
+    nginx \
+    logrotate \
+    libltdl-dev \
+    && apt-get autoremove -y && apt-get clean
+
+
+ RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add -
+ RUN curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | tee /etc/apt/sources.list.d/mssql-tools.list
+ RUN rm -f /etc/apt/sources.list.d/google-chrome.list
+ RUN rm -f /etc/apt/sources.list.d/sbt.list
+ RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add -
+ RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4EB27DB2A3B88B8B
+ RUN apt-get update -y
+ RUN ACCEPT_EULA=Y apt-get install mssql-tools -y
+ RUN apt-get install unixodbc-dev -y
+ RUN export PATH=$PATH:/opt/mssql-tools/bin
+ RUN pecl channel-update pecl.php.net
+ RUN pecl install sqlsrv pdo_sqlsrv
+
+# composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+###################################################################
+# CONFIGS PHP e NGINX
+##################################################################
+# Copiando configurações dos serviços contidas no diretório .docker do projeto
+COPY ${PATH_CONFIG_NGINX}/nginx.conf /etc/nginx/nginx.conf
+COPY ${PATH_CONFIG_FPM}/www.conf /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
+COPY ${PATH_CONFIG_PHP}/php-fpm.ini /etc/php/${PHP_VERSION}/fpm/php.ini
+COPY ${PATH_CONFIG_PHP}/php-override.ini /etc/php/${PHP_VERSION}/fpm/conf.d/99-overrides.ini
+COPY ${PATH_CONFIG_PHP}/php-cli.ini /etc/php/${PHP_VERSION}/cli/php.ini
+COPY ${PATH_CONFIG_PHP}/php-override.ini /etc/php/${PHP_VERSION}/cli/conf.d/99-overrides.ini
+
+###################################################################
+# New Relic
+##################################################################
+ENV NEW_RELIC_AGENT_VERSION "10.9.0.324"
+ENV NEW_RELIC_LICENSE_KEY "fc376bdc1f292afe1a63709d5117d496FFFFNRAL"
+
+RUN curl -L "https://download.newrelic.com/php_agent/archive/${NEW_RELIC_AGENT_VERSION}/newrelic-php5-${NEW_RELIC_AGENT_VERSION}-linux.tar.gz" | tar -C /tmp -zx \
+     && export NR_INSTALL_USE_CP_NOT_LN=1 \
+     && export NR_INSTALL_SILENT=1 \
+     && /tmp/newrelic-php5-*/newrelic-install install \
+     && rm -rf /tmp/newrelic-php5-* /tmp/nrinstall*
+
+RUN sed -i \
+    -e 's/"REPLACE_WITH_REAL_KEY"/${NEW_RELIC_LICENSE_KEY}/' \
+    -e 's/newrelic.appname = "PHP Application"/newrelic.appname = "PHP Application ECS"/' \
+    -e 's/;newrelic.daemon.app_connect_timeout =.*/newrelic.daemon.app_connect_timeout=15s/' \
+    -e 's/;newrelic.daemon.start_timeout =.*/newrelic.daemon.start_timeout=5s/' \
+    -e 's/;newrelic.application_logging.forwarding.log_level =.*/newrelic.application_logging.forwarding.log_level="INFO"/' \
+    -e 's/;newrelic.application_logging.forwarding.enabled =.*/newrelic.application_logging.forwarding.enabled=false/' \
+    -e 's/;newrelic.framework.drupal.modules =.*/newrelic.framework.drupal.modules=false/' \
+    -e 's/;newrelic.framework.wordpress.hooks =.*/newrelic.framework.wordpress.hooks=false/' \
+    -e 's/;newrelic.framework =.*/newrelic.framework="laravel"/' \
+    /etc/php/${PHP_VERSION}/fpm/conf.d/newrelic.ini
+
+###################################################################
+# Fluent BIT
+##################################################################
+
+Run curl https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh
+COPY ${PATH_CONFIG_FLUENT_BIT}/out_newrelic-linux-amd64-1.17.1.so /etc/fluent-bit/out_newrelic-linux-amd64-1.17.1.so
+COPY ${PATH_CONFIG_FLUENT_BIT}/fluentbit.conf /etc/fluent-bit/fluentbit.conf
+COPY ${PATH_CONFIG_FLUENT_BIT}/plugins.conf /etc/fluent-bit/plugins.conf
+
+###################################################################
+# S6 Services
+##################################################################
+
+## Copy All S6 services script
+COPY ${PATH_CONFIG_S6}/. /etc/s6-overlay/s6-rc.d/.
+## Change permissions to execution for the daemons
+RUN chmod 755 /etc/s6-overlay/s6-rc.d/*/run
+## Create the files for the s6 notice the services to run
+RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/fluent-bit
+RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/fpm
+RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/nginx
+RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/cron
+#RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/queue
+
+# Ativando driver pdo sqlserver
+RUN echo "; priority=20\nextension=sqlsrv.so" >> /etc/php/8.1/mods-available/sqlsrv.ini && \
+    echo "; priority=30\nextension=pdo_sqlsrv.so" >> /etc/php/8.1/mods-available/pdo_sqlsrv.ini
+RUN phpenmod -v 8.1 sqlsrv pdo_sqlsrv
+
+###################################################################
+# CRON
+##################################################################
+## Copy All S6 services script
+#RUN mkdir /etc/logrotate
+COPY ${PATH_CONFIG}/crontabs/. /etc/cron.d/.
+
+###################################################################
+# Log Rotate
+##################################################################
+COPY ${PATH_CONFIG}/logrotate/laravel.conf /etc/logrotate.d/laravel.conf
+
+###################################################################
+# XDEBUG  OBS: apenas nas imagens para Dockerfile.local
+##################################################################
+RUN apt update && apt install \
+    php${PHP_VERSION}-xdebug \
+    -y --allow-unauthenticated \
+    && apt autoremove -y && apt clean
+RUN echo "xdebug.mode=debug" >> /etc/php/${PHP_VERSION}/mods-available/xdebug.ini \
+    && echo "xdebug.idekey=DOCKER_ABC" >> /etc/php/${PHP_VERSION}/mods-available/xdebug.ini \
+    && echo "xdebug.client_host=host.docker.internal" >> /etc/php/${PHP_VERSION}/mods-available/xdebug.ini \
+    && echo "xdebug.start_with_request=yes" >> /etc/php/${PHP_VERSION}/mods-available/xdebug.ini \
+    && echo "xdebug.discover_client_host=0" >> /etc/php/${PHP_VERSION}/mods-available/xdebug.ini
+
+# Limpar cache apt
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+#######################################
+# Final da imagem base
+#######################################
+
+#######################################
+# Início da imagem extendida
+#######################################
+WORKDIR /var/www
+COPY . .
+RUN date > build.txt
+RUN composer install --prefer-dist --no-dev -o
+RUN find /var/www -type d -exec chmod 0755 {} \;
+RUN find /var/www -type f -exec chmod 0644 {} \;
+RUN chown -Rf www-data:www-data /var/www
+# Cron para ler fila do laravel
+RUN echo "* * * * * root /usr/bin/php /var/www/artisan schedule:run" > /etc/cron.d/cronjob
+
+# não usar mais os comandos abaixo. O s6 é responsável por manter o serviço de cron rodando.
+#RUN crontab /etc/cron.d/cronjob
+#CMD ["cron", "-f", "-L", "15"]

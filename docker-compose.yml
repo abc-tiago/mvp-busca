@@ -1,0 +1,28 @@
+version: "3.9"
+name: "mvp-busca"
+
+services:
+    mvp-busca-backend:
+        build:
+            context: .
+            dockerfile: Dockerfile.local
+        container_name: mvp-busca-backend
+        image: mvp-busca-backend
+        restart: unless-stopped
+        hostname: mvp-busca-backend.local
+        ports:
+            - "2300:80"
+        deploy:
+            resources:
+                limits:
+                    cpus: "0.25"
+                    memory: 512M
+        volumes:
+            - .:/var/www
+        networks:
+            - default
+
+networks:
+    default:
+        driver: bridge
+        name: abc

@@ -1,0 +1,1 @@
+0 0 * * * root /usr/sbin/logrotate -fv /etc/logrotate.d/laravel.conf --state /var/log/logrotate-stat
